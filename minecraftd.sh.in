@@ -22,6 +22,8 @@ declare -r GAME="@GAME@"
 [[ -n "${SERVER_START_CMD}" ]] && declare -r SERVER_START_CMD=${SERVER_START_CMD} || SERVER_START_CMD="@SERVER_START_CMD@"
 [[ -n "${SERVER_START_SUCCESS}" ]] && declare -r SERVER_START_SUCCESS=${SERVER_START_SUCCESS} || SERVER_START_SUCCESS="@SERVER_START_SUCCESS@"
 
+[[ -n "${NO_PLAYERS_TEXT}" ]] && declare -r NO_PLAYERS_TEXT=${NO_PLAYERS_TEXT} || NO_PLAYERS_TEXT="@NO_PLAYERS_TEXT@"
+
 # System parameters for the control script
 [[ -n "${IDLE_SERVER}" ]]       && tmp_IDLE_SERVER=${IDLE_SERVER}   || IDLE_SERVER="@IDLE_SERVER@"
 [[ -n "${IDLE_SESSION_NAME}" ]] && declare -r IDLE_SESSION_NAME=${IDLE_SESSION_NAME} || IDLE_SESSION_NAME="@IDLE_SESSION_NAME@"
@@ -38,6 +40,13 @@ source /etc/conf.d/"${GAME}" 2>/dev/null || >&2 echo "Could not source /etc/conf
 # Preserve the content of IDLE_SERVER without making it readonly
 [[ -n ${tmp_IDLE_SERVER} ]] && IDLE_SERVER=${tmp_IDLE_SERVER}
 
+# Commands to send to the server console to do different actions
+[[ -n "${SERVER_COMMAND_LIST_PLAYERS}" ]] && declare -r SERVER_COMMAND_LIST_PLAYERS=${SERVER_COMMAND_LIST_PLAYERS} || SERVER_COMMAND_LIST_PLAYERS="@SERVER_COMMAND_LIST_PLAYERS@"
+[[ -n "${SERVER_COMMAND_SAVE}" ]]         && declare -r SERVER_COMMAND_SAVE=${SERVER_COMMAND_SAVE} || SERVER_COMMAND_SAVE="@SERVER_COMMAND_SAVE@"
+[[ -n "${SERVER_COMMAND_AUTOSAVE_ON}" ]]  && declare -r SERVER_COMMAND_AUTOSAVE_ON=${SERVER_COMMAND_AUTOSAVE_ON} || SERVER_COMMAND_AUTOSAVE_ON="@SERVER_COMMAND_AUTOSAVE_ON@"
+[[ -n "${SERVER_COMMAND_AUTOSAVE_OFF}" ]] && declare -r SERVER_COMMAND_AUTOSAVE_OFF=${SERVER_COMMAND_AUTOSAVE_OFF} || SERVER_COMMAND_AUTOSAVE_OFF="@SERVER_COMMAND_AUTOSAVE_OFF@"
+[[ -n "${SERVER_COMMAND_CLOSE_SERVER}" ]] && declare -r SERVER_COMMAND_CLOSE_SERVER=${SERVER_COMMAND_CLOSE_SERVER} || SERVER_COMMAND_CLOSE_SERVER="@SERVER_COMMAND_CLOSE_SERVER@"
+[[ -n "${SERVER_COMMAND_SAY}" ]]          && declare -r SERVER_COMMAND_SAY=${SERVER_COMMAND_SAY} || SERVER_COMMAND_SAY="@SERVER_COMMAND_SAY@"
 
 # Strictly disallow uninitialized Variables
 set -u
@@ -86,13 +95,20 @@ game_command() {
 
 # Check whether there are player on the server through list
 is_player_online() {
-	response="$(sleep_time=0.6 return_stdout=true game_command list)"
+	response="$(sleep_time=0.6 return_stdout=true game_command ${SERVER_COMMAND_LIST_PLAYERS})"
 	# Delete leading line and fancy characters from free response string
 	response="$(echo "${response}" | sed -r -e 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})*)?[JKmsuG]//g')"
 	# The list command prints a line containing the usernames after the last occurrence of ": "
 	# and since playernames may not contain this string the clean player-list can easily be retrieved.
 	# Otherwise check the first digit after the last occurrence of "There are". If it is 0 then there
 	# are no players on the server. Should this test fail as well. Assume that a player is online.
+	if echo ${response} | grep ${NO_PLAYERS_TEXT}; then
+		return 1
+	else
+		return 0
+	fi
+	echo this should never happen
+
 	if [[ $(echo "${response}" | sed -n -r -e 's/.*\: ?//p' | tr -d '\n' | wc -c) -le 1 ]]; then
 		# No player is online
 		return 0
@@ -259,19 +275,19 @@ server_stop() {
 		if is_player_online; then
 			# No player was seen on the server through list
 			echo -en "Server is going down..."
-			game_command stop
+			game_command ${SERVER_COMMAND_CLOSE_SERVER}
 		else
 			# Player(s) were seen on the server through list (or an error occurred)
 			# Warning the users through the server console
-			game_command say "Server is going down in 10 seconds! HURRY UP WITH WHATEVER YOU ARE DOING!"
-			game_command save-all
+			game_command ${SERVER_COMMAND_SAY} "Server is going down in 10 seconds! HURRY UP WITH WHATEVER YOU ARE DOING!"
+			game_command ${SERVER_COMMAND_SAVE}
 			echo -en "Server is going down in..."
 			for i in {1..10}; do
-				game_command say "down in... $(( 10 - i ))"
+				game_command ${SERVER_COMMAND_SAY} "down in... $(( 10 - i ))"
 				echo -n " $(( 10 - i ))"
 				sleep 1
 			done
-			game_command stop
+			game_command ${SERVER_COMMAND_CLOSE_SERVER}
 		fi
 
 		# Finish as soon as the server has shut down completely
@@ -341,12 +357,12 @@ backup_files() {
 	fname="$(date +%Y_%m_%d_%H.%M.%S).tar.gz"
 	${SUDO_CMD} mkdir -p "${BACKUP_DEST}"
 	if socket_has_session "${SESSION_NAME}"; then
-		game_command save-off
-		game_command save-all
+		game_command ${SERVER_COMMAND_AUTOSAVE_OFF}
+		game_command ${SERVER_COMMAND_SAVE}
 		sleep "${sleep_time:-0.3}"
 		sync && wait
 		${SUDO_CMD} tar -C "${SERVER_ROOT}" -cf "${BACKUP_DEST}/${fname}" ${BACKUP_PATHS} --totals ${BACKUP_FLAGS} 2>&1 | grep -v "tar: Removing leading "
-		game_command save-on
+		game_command ${SERVER_COMMAND_AUTOSAVE_ON}
 	else
 		${SUDO_CMD} tar -C "${SERVER_ROOT}" -cf "${BACKUP_DEST}/${fname}" ${BACKUP_PATHS} --totals ${BACKUP_FLAGS} 2>&1 | grep -v "tar: Removing leading "
 	fi
